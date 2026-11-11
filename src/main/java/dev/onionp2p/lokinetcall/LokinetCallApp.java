@@ -6,6 +6,8 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
@@ -14,9 +16,19 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.io.IOException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public final class LokinetCallApp extends Application {
     private final Label status = new Label("Starting UDP listener…");
+    private final Label endpoint = new Label("Preparing Lokinet call address…");
+    private final Button copyEndpoint = new Button("Copy");
+    private final ScheduledExecutorService endpointPoller = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "lokinet-endpoint-check");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final TextField listenPort = new TextField("9922");
     private final TextField peerAddress = new TextField();
     private final TextField peerPort = new TextField("9922");
@@ -42,10 +54,22 @@ public final class LokinetCallApp extends Application {
         peerRow.setAlignment(Pos.CENTER_LEFT);
         HBox actions = new HBox(8, callButton, acceptButton, hangupButton);
         actions.setAlignment(Pos.CENTER_LEFT);
+        HBox endpointRow = new HBox(10, new Label("My Lokinet call address"), endpoint, copyEndpoint);
+        endpointRow.setAlignment(Pos.CENTER_LEFT);
+        endpoint.setWrapText(true);
+        endpoint.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(endpoint, javafx.scene.layout.Priority.ALWAYS);
+        copyEndpoint.setDisable(true);
+        copyEndpoint.setOnAction(event -> {
+            ClipboardContent content = new ClipboardContent();
+            content.putString(endpoint.getText());
+            Clipboard.getSystemClipboard().setContent(content);
+        });
 
         VBox root = new VBox(14,
                 new Label("Lokinet Call") {{ getStyleClass().add("title"); }},
                 new Label("A tiny encrypted audio-call experiment over Lokinet."),
+                endpointRow,
                 new Label("Your UDP port"), localRow,
                 new Label("Call a peer"), peerRow,
                 callKey,
@@ -68,7 +92,31 @@ public final class LokinetCallApp extends Application {
         stage.getScene().getStylesheets().add(getClass().getResource("/call.css").toExternalForm());
         stage.setOnCloseRequest(event -> closeSession());
         stage.show();
+        configureAndFindEndpoint();
         bindListener();
+    }
+
+    private void configureAndFindEndpoint() {
+        try {
+            LokinetEndpoint.Setup setup = LokinetEndpoint.configure();
+            if (setup.restartRequired()) {
+                endpoint.setText("Configured in " + setup.configPath() + ". Restart Lokinet to publish your call address.");
+                status.setText("Lokinet needs a restart to publish this device’s call endpoint.");
+            } else {
+                endpoint.setText("Looking up your published address from " + setup.configPath() + "…");
+            }
+            endpointPoller.scheduleWithFixedDelay(() -> {
+                String address = LokinetEndpoint.findAddress();
+                Platform.runLater(() -> {
+                    if (address != null) {
+                        endpoint.setText(address + ":" + listenPort.getText().strip());
+                        copyEndpoint.setDisable(false);
+                    }
+                });
+            }, 0, 10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            endpoint.setText("Could not configure endpoint: " + e.getMessage());
+        }
     }
 
     private void bindListener() {
@@ -135,6 +183,7 @@ public final class LokinetCallApp extends Application {
     }
 
     private void closeSession() {
+        endpointPoller.shutdownNow();
         if (session != null) session.close();
     }
 
