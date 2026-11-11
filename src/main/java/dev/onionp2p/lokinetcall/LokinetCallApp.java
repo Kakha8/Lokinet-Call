@@ -135,10 +135,44 @@ public final class LokinetCallApp extends Application {
         if (session == null) { bindListener(); if (session == null) return; }
         try {
             session.setSharedKey(callKey.getText());
-            session.call(peerAddress.getText().strip(), Integer.parseInt(peerPort.getText().strip()));
-            status.setText("Calling " + peerAddress.getText().strip() + "…");
+            PeerTarget target = parsePeerTarget(peerAddress.getText(), peerPort.getText());
+            String ownAddress = endpoint.getText().strip();
+            int ownPortSeparator = ownAddress.lastIndexOf(':');
+            if (ownPortSeparator > 0 && ownAddress.substring(ownPortSeparator + 1).chars().allMatch(Character::isDigit)) {
+                ownAddress = ownAddress.substring(0, ownPortSeparator);
+            }
+            if (target.host().equalsIgnoreCase(ownAddress)) {
+                throw new IllegalArgumentException("That is this device’s own Lokinet address. Enter the other device’s address.");
+            }
+            session.call(target.host(), target.port());
+            peerAddress.setText(target.host());
+            peerPort.setText(Integer.toString(target.port()));
+            status.setText("Calling " + target.host() + "… Waiting for the other device to accept.");
             callButton.setDisable(true);
+            hangupButton.setDisable(false);
         } catch (Exception e) { reportError(e.getMessage()); }
+    }
+
+    private record PeerTarget(String host, int port) { }
+
+    private static PeerTarget parsePeerTarget(String addressText, String portText) {
+        String host = addressText == null ? "" : addressText.strip();
+        int port = Integer.parseInt(portText.strip());
+        if (host.startsWith("http://")) host = host.substring("http://".length());
+        else if (host.startsWith("https://")) host = host.substring("https://".length());
+        int path = host.indexOf('/');
+        if (path >= 0) host = host.substring(0, path);
+        int separator = host.lastIndexOf(':');
+        if (separator > 0 && separator < host.length() - 1) {
+            String portPart = host.substring(separator + 1);
+            if (portPart.chars().allMatch(Character::isDigit)) {
+                port = Integer.parseInt(portPart);
+                host = host.substring(0, separator);
+            }
+        }
+        if (host.isBlank()) throw new IllegalArgumentException("Enter the other device’s full .loki address.");
+        if (port < 1 || port > 65535) throw new IllegalArgumentException("Enter a valid UDP port.");
+        return new PeerTarget(host, port);
     }
 
     private void incomingCall(String remote) {

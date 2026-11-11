@@ -75,11 +75,10 @@ final class CallSession implements AutoCloseable {
         ensureKey();
         if (active) throw new IllegalStateException("A call is already active.");
         if (host.isBlank() || port < 1 || port > 65535) throw new IllegalArgumentException("Enter a peer address and valid UDP port.");
-        peer = new InetSocketAddress(InetAddress.getByName(host), port);
+        peer = new InetSocketAddress(LokinetEndpoint.resolvePeerAddress(host), port);
         callId = randomId();
         inviteStartedAt = lastInviteAt = System.currentTimeMillis();
         sendControl("INVITE", callId, peer);
-        state.accept("Calling " + host + "…", false);
     }
 
     synchronized void accept() throws Exception {
@@ -129,9 +128,15 @@ final class CallSession implements AutoCloseable {
     }
 
     private void handleControl(String message, InetSocketAddress from) throws Exception {
-        String[] fields = message.split(" ");
-        if (fields.length != 3 || !verify(fields[0], fields[1], fields[2])) return;
+        String[] fields = message.strip().split("\\s+");
+        if (fields.length != 3) return;
         String type = fields[0];
+        if (!verify(type, fields[1], fields[2])) {
+            if ("INVITE".equals(type)) {
+                errors.accept("Call request reached this device, but its key did not match. Check the same key is entered on both devices.");
+            }
+            return;
+        }
         String id = fields[1];
         if ("INVITE".equals(type) && !active) {
             pendingPeer = from;

@@ -59,6 +59,38 @@ final class LokinetEndpoint {
         return new Setup(config, key, true);
     }
 
+    static java.net.InetAddress resolvePeerAddress(String host) throws IOException {
+        String normalized = host == null ? "" : host.strip().toLowerCase(Locale.ROOT);
+        if (!normalized.endsWith(".loki")) {
+            return java.net.InetAddress.getByName(normalized);
+        }
+
+        Pattern addressPattern = Pattern.compile("(?im)^\\s*Address:\\s*((?:\\d{1,3}\\.){3}\\d{1,3})\\s*$");
+        for (String dns : new String[]{"127.0.0.1", "127.3.2.1"}) {
+            try {
+                Process process = new ProcessBuilder("nslookup", "-type=A", normalized, dns)
+                        .redirectErrorStream(true).start();
+                boolean finished = process.waitFor(4, java.util.concurrent.TimeUnit.SECONDS);
+                if (!finished) {
+                    process.destroyForcibly();
+                    continue;
+                }
+                String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                Matcher matcher = addressPattern.matcher(output);
+                String resolved = null;
+                while (matcher.find()) {
+                    String candidate = matcher.group(1);
+                    if (!dns.equals(candidate)) resolved = candidate;
+                }
+                if (resolved != null) return java.net.InetAddress.getByName(resolved);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while resolving the peer through Lokinet DNS.", e);
+            }
+        }
+        throw new IOException("Could not resolve " + normalized + " through Lokinet DNS. Check that Lokinet is connected and the peer address is correct.");
+    }
+
     static String findAddress() {
         // Lokinet exposes the locally hosted SNApp name through its DNS resolver as localhost.loki.
         for (String dns : new String[]{"127.0.0.1", "127.3.2.1"}) {
